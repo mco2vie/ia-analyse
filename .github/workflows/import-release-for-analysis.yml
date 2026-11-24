@@ -1,10 +1,15 @@
 name: Importer les fichiers de la Release pour analyse
 
 on:
-  # GitHub ne garantit pas qu'un ajout de fichier depuis l'interface Release
-  # déclenche release.edited : on vérifie donc régulièrement les pièces jointes.
+  # Vérification périodique : l'ajout d'un asset depuis l'interface GitHub
+  # ne déclenche pas systématiquement release.edited.
   schedule:
     - cron: "*/5 * * * *"
+  # Le commit de ce workflow déclenche un premier import de validation.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/import-release-for-analysis.yml"
   release:
     types: [published, edited]
   workflow_dispatch:
@@ -44,7 +49,7 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Vérifier si de nouvelles pièces jointes existent
+      - name: Vérifier les nouvelles pièces jointes
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -52,7 +57,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           RELEASE_JSON="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG_NAME")"
           ASSET_COUNT="$(jq '.assets | length' <<< "$RELEASE_JSON")"
           if [[ "$ASSET_COUNT" -eq 0 ]]; then
@@ -61,14 +65,14 @@ jobs:
             exit 0
           fi
 
-          # Date de la dernière exécution réussie de CE workflow, hors exécution actuelle.
+          # Cherche la dernière exécution réussie de ce workflow.
+          # Pour le premier passage, l'époque 1970 force l'import initial.
           LAST_SUCCESS="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/import-release-for-analysis.yml/runs?per_page=50" \
-            --jq "[.workflow_runs[] | select((.id | tostring) != env.GITHUB_RUN_ID and .conclusion == \"success\")][0].created_at // \"1970-01-01T00:00:00Z\"")"
+            --jq '[.workflow_runs[] | select(.conclusion == "success") | select(.id != '"${GITHUB_RUN_ID}"')] | sort_by(.created_at) | last | .created_at // "1970-01-01T00:00:00Z"')"
 
           NEW_COUNT="$(jq --arg last "$LAST_SUCCESS" '[.assets[] | select(.created_at > $last)] | length' <<< "$RELEASE_JSON")"
           echo "Dernière importation réussie : $LAST_SUCCESS"
           echo "Nouvelles pièces jointes : $NEW_COUNT"
-
           if [[ "$NEW_COUNT" -gt 0 ]]; then
             echo "has_new=true" >> "$GITHUB_OUTPUT"
           else
@@ -91,7 +95,7 @@ jobs:
             exit 1
           fi
           echo "Fichiers récupérés :"
-          find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -printf '%f (%s octets)\\n'
+          find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -printf '%f (%s octets)\n'
 
       - name: Publier un artefact temporaire pour ChatGPT
         if: steps.check.outputs.has_new == 'true'
