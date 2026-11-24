@@ -31,7 +31,7 @@ jobs:
   delete-release-asset:
     runs-on: ubuntu-latest
     steps:
-      - name: Récupérer le dépôt pour les demandes automatiques
+      - name: Récupérer le dépôt
         if: github.event_name == 'push' || github.event_name == 'schedule'
         uses: actions/checkout@v4
 
@@ -43,23 +43,22 @@ jobs:
           INPUT_TAG: ${{ inputs.tag_name }}
           INPUT_ASSET: ${{ inputs.asset_name }}
           INPUT_CONFIRMATION: ${{ inputs.confirmation }}
-          COMMIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "push" || "$EVENT_NAME" == "schedule" ]]; then
-            if [[ "$EVENT_NAME" == "push" ]]; then
-              mapfile -t REQUEST_FILES < <(git diff-tree --no-commit-id --name-only -r "$COMMIT_SHA" | grep -E '^\.github/delete-requests/[^/]+\.txt$' || true)
-            else
-              mapfile -t REQUEST_FILES < <(find .github/delete-requests -maxdepth 1 -type f -name '*.txt' 2>/dev/null | sort | head -n 1)
-            fi
-            if [[ "${#REQUEST_FILES[@]}" -ne 1 ]]; then
-              echo "Aucune demande unique à traiter."
+            # Ne pas utiliser git diff-tree : checkout@v4 est volontairement shallow.
+            # Le poller traite la première demande en attente, même si le push
+            # a été créé par une intégration/API et n'a pas déclenché Actions.
+            REQUEST_FILE="$(find .github/delete-requests -maxdepth 1 -type f -name '*.txt' 2>/dev/null | sort | head -n 1 || true)"
+            if [[ -z "$REQUEST_FILE" ]]; then
+              echo "Aucune demande en attente."
+              echo "asset=" >> "$GITHUB_OUTPUT"
+              echo "request_file=" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            REQUEST_FILE="${REQUEST_FILES[0]}"
-            TAG_NAME="$(sed -n 's/^tag=//p' "$REQUEST_FILE")"
-            ASSET_NAME="$(sed -n 's/^asset=//p' "$REQUEST_FILE")"
-            CONFIRMATION="$(sed -n 's/^confirmation=//p' "$REQUEST_FILE")"
+            TAG_NAME="$(sed -n 's/^tag=//p' "$REQUEST_FILE" | head -n 1)"
+            ASSET_NAME="$(sed -n 's/^asset=//p' "$REQUEST_FILE" | head -n 1)"
+            CONFIRMATION="$(sed -n 's/^confirmation=//p' "$REQUEST_FILE" | head -n 1)"
             echo "request_file=$REQUEST_FILE" >> "$GITHUB_OUTPUT"
           else
             TAG_NAME="$INPUT_TAG"
