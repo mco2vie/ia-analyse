@@ -1,6 +1,12 @@
 name: Supprimer une pièce jointe de Release
 
 on:
+  # Une demande déposée dans ce dossier depuis ChatGPT déclenche la suppression.
+  push:
+    branches: [main]
+    paths:
+      - ".github/delete-requests/*.txt"
+  # Conservation du mode manuel en secours.
   workflow_dispatch:
     inputs:
       tag_name:
@@ -9,7 +15,7 @@ on:
         type: string
         default: "analyse-data"
       asset_name:
-        description: "Nom exact du fichier à supprimer (ex. orbitals.log)"
+        description: "Nom exact du fichier à supprimer"
         required: true
         type: string
         default: "orbitals.log"
@@ -25,43 +31,81 @@ jobs:
   delete-release-asset:
     runs-on: ubuntu-latest
     steps:
-      - name: Vérifier la confirmation et la présence du fichier
-        id: verify
+      - name: Récupérer le dépôt pour une demande automatique
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+
+      - name: Lire et valider la demande
+        id: request
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ inputs.tag_name }}
-          ASSET_NAME: ${{ inputs.asset_name }}
-          CONFIRMATION: ${{ inputs.confirmation }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag_name }}
+          INPUT_ASSET: ${{ inputs.asset_name }}
+          INPUT_CONFIRMATION: ${{ inputs.confirmation }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          if [[ "$CONFIRMATION" != "SUPPRIMER" ]]; then
-            echo "::error::Suppression annulée : la confirmation doit être exactement SUPPRIMER."
-            exit 1
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            mapfile -t REQUEST_FILES < <(git diff-tree --no-commit-id --name-only -r "$COMMIT_SHA" | grep -E '^\.github/delete-requests/[^/]+\.txt$' || true)
+            if [[ "${#REQUEST_FILES[@]}" -ne 1 ]]; then
+              echo "::error::Une seule demande de suppression est autorisée par commit."
+              exit 1
+            fi
+            REQUEST_FILE="${REQUEST_FILES[0]}"
+            TAG_NAME="$(sed -n 's/^tag=//p' "$REQUEST_FILE")"
+            ASSET_NAME="$(sed -n 's/^asset=//p' "$REQUEST_FILE")"
+            CONFIRMATION="$(sed -n 's/^confirmation=//p' "$REQUEST_FILE")"
+            echo "request_file=$REQUEST_FILE" >> "$GITHUB_OUTPUT"
+          else
+            TAG_NAME="$INPUT_TAG"
+            ASSET_NAME="$INPUT_ASSET"
+            CONFIRMATION="$INPUT_CONFIRMATION"
+            echo "request_file=" >> "$GITHUB_OUTPUT"
           fi
 
-          if [[ -z "$TAG_NAME" || -z "$ASSET_NAME" ]]; then
-            echo "::error::Le tag et le nom exact du fichier sont obligatoires."
-            exit 1
-          fi
+          [[ "$CONFIRMATION" == "SUPPRIMER" ]] || { echo "::error::Confirmation invalide."; exit 1; }
+          [[ -n "$TAG_NAME" && -n "$ASSET_NAME" ]] || { echo "::error::Tag ou nom de fichier manquant."; exit 1; }
+          [[ "$ASSET_NAME" != */* ]] || { echo "::error::Nom de fichier invalide."; exit 1; }
 
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Vérifier la présence exacte du fichier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.request.outputs.tag }}
+          ASSET_NAME: ${{ steps.request.outputs.asset }}
+        shell: bash
+        run: |
+          set -euo pipefail
           ASSETS="$(gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
           if ! grep -Fqx -- "$ASSET_NAME" <<< "$ASSETS"; then
-            echo "::error::Le fichier exact '$ASSET_NAME' est absent de la Release '$TAG_NAME'. Rien n'a été supprimé."
+            echo "::error::Le fichier exact '$ASSET_NAME' est absent de la Release '$TAG_NAME'."
             exit 1
           fi
-
-          echo "Fichier confirmé : $ASSET_NAME"
-          echo "Release : $TAG_NAME"
 
       - name: Supprimer la pièce jointe confirmée
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ inputs.tag_name }}
-          ASSET_NAME: ${{ inputs.asset_name }}
+          TAG_NAME: ${{ steps.request.outputs.tag }}
+          ASSET_NAME: ${{ steps.request.outputs.asset }}
         shell: bash
         run: |
           set -euo pipefail
           gh release delete-asset "$TAG_NAME" "$ASSET_NAME" --repo "$GITHUB_REPOSITORY" --yes
           echo "Suppression terminée : '$ASSET_NAME' de la Release '$TAG_NAME'."
+
+      - name: Consommer la demande automatique
+        if: github.event_name == 'push'
+        env:
+          REQUEST_FILE: ${{ steps.request.outputs.request_file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -- "$REQUEST_FILE"
+          git commit -m "Consommer la demande de suppression"
+          git push
