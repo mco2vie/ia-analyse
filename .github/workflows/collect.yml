@@ -1,0 +1,91 @@
+name: Collecte vers IA ANALYSE
+
+on:
+  workflow_call:
+    inputs:
+      file_paths:
+        description: "Liste de chemins/globs relatifs au dépôt appelant, un par ligne"
+        required: true
+        type: string
+    secrets:
+      IA_ANALYSE_TOKEN:
+        description: "PAT autorisé à écrire dans mco2vie/ia-analyse"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  archive-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le dépôt source
+        uses: actions/checkout@v4
+
+      - name: Vérifier la confidentialité du dépôt central
+        env:
+          GH_TOKEN: ${{ secrets.IA_ANALYSE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRIVATE="$(gh api repos/mco2vie/ia-analyse --jq '.private')"
+          if [[ "$PRIVATE" != "true" ]]; then
+            echo "::error::Le dépôt mco2vie/ia-analyse est public. Passe-le en privé avant tout envoi de données."
+            exit 1
+          fi
+
+      - name: Construire l'archive
+        id: archive
+        env:
+          FILE_PATHS: ${{ inputs.file_paths }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import os
+          import zipfile
+          from pathlib import Path
+
+          patterns = [line.strip() for line in os.environ["FILE_PATHS"].splitlines() if line.strip()]
+          selected = {}
+          excluded_parts = {".git", ".github", "node_modules", ".venv", "venv", "__pycache__"}
+
+          for pattern in patterns:
+              for match in glob.glob(pattern, recursive=True):
+                  path = Path(match)
+                  if not path.is_file() or path.is_symlink():
+                      continue
+                  if any(part in excluded_parts for part in path.parts):
+                      continue
+                  selected[path.as_posix()] = path
+
+          if not selected:
+              raise SystemExit("Aucun fichier trouvé. Vérifie les chemins/globs file_paths.")
+
+          repo = os.environ["SOURCE_REPOSITORY"].replace("/", "-")
+          archive = f"analysis-{repo}-{os.environ['RUN_ID']}-{os.environ['RUN_ATTEMPT']}.zip"
+
+          with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+              for name, path in sorted(selected.items()):
+                  zf.write(path, arcname=name)
+
+          print(f"Archive créée : {archive} ({len(selected)} fichiers)")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"archive={archive}\n")
+          PY
+
+      - name: Envoyer l'archive dans la Release centrale
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: mco2vie/ia-analyse
+          tag_name: analysis-data
+          name: Données d'analyse
+          body: "Archives envoyées par les workflows des dépôts mco2vie. Les assets doivent être supprimés après analyse."
+          files: ${{ steps.archive.outputs.archive }}
+          token: ${{ secrets.IA_ANALYSE_TOKEN }}
+          make_latest: false
+          fail_on_unmatched_files: true
