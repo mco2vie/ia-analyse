@@ -2,7 +2,7 @@ name: Importer les fichiers de la Release pour analyse
 
 on:
   release:
-    types: [published]
+    types: [published, edited]
   workflow_dispatch:
     inputs:
       tag_name:
@@ -51,7 +51,7 @@ jobs:
             exit 1
           fi
           echo "Fichiers récupérés :"
-          find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -printf '%f (%s octets)\n'
+          find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -printf '%f (%s octets)\\n'
 
       - name: Publier un artefact temporaire pour ChatGPT
         uses: actions/upload-artifact@v4
