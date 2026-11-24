@@ -1,0 +1,67 @@
+name: Supprimer une pièce jointe de Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag de la Release (ex. analyse-data)"
+        required: true
+        type: string
+        default: "analyse-data"
+      asset_name:
+        description: "Nom exact du fichier à supprimer (ex. orbitals.log)"
+        required: true
+        type: string
+        default: "orbitals.log"
+      confirmation:
+        description: 'Pour autoriser la suppression, saisir exactement SUPPRIMER'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  delete-release-asset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vérifier la confirmation et la présence du fichier
+        id: verify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+          ASSET_NAME: ${{ inputs.asset_name }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$CONFIRMATION" != "SUPPRIMER" ]]; then
+            echo "::error::Suppression annulée : la confirmation doit être exactement SUPPRIMER."
+            exit 1
+          fi
+
+          if [[ -z "$TAG_NAME" || -z "$ASSET_NAME" ]]; then
+            echo "::error::Le tag et le nom exact du fichier sont obligatoires."
+            exit 1
+          fi
+
+          ASSETS="$(gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          if ! grep -Fqx -- "$ASSET_NAME" <<< "$ASSETS"; then
+            echo "::error::Le fichier exact '$ASSET_NAME' est absent de la Release '$TAG_NAME'. Rien n'a été supprimé."
+            exit 1
+          fi
+
+          echo "Fichier confirmé : $ASSET_NAME"
+          echo "Release : $TAG_NAME"
+
+      - name: Supprimer la pièce jointe confirmée
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+          ASSET_NAME: ${{ inputs.asset_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release delete-asset "$TAG_NAME" "$ASSET_NAME" --repo "$GITHUB_REPOSITORY" --yes
+          echo "Suppression terminée : '$ASSET_NAME' de la Release '$TAG_NAME'."
