@@ -1,0 +1,13 @@
+# Données d'analyse locales — ne jamais committer
+*.dmp
+*.mdmp
+*.core
+*.7z
+*.zip
+*.rar
+*.log
+*.etl
+*.trace
+analysis-data/
+dumps/
+logs/
