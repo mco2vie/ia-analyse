@@ -1,0 +1,62 @@
+name: Importer les fichiers de la Release pour analyse
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag de la Release à récupérer"
+        required: true
+        default: "analyse-data"
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Déterminer le tag
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            TAG="$EVENT_TAG"
+          else
+            TAG="$INPUT_TAG"
+          fi
+          if [[ -z "$TAG" ]]; then
+            echo "::error::Aucun tag de Release fourni."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Télécharger les pièces jointes de la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          gh release download "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release-assets"
+          if ! find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -print -quit | grep -q .; then
+            echo "::error::La Release ne contient aucun fichier téléchargeable."
+            exit 1
+          fi
+          echo "Fichiers récupérés :"
+          find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -printf '%f (%s octets)\n'
+
+      - name: Publier un artefact temporaire pour ChatGPT
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ github.run_id }}
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
+          retention-days: 1
