@@ -1,0 +1,3 @@
+tag=analyse-data
+asset=orbitals.4.log
+confirmation=SUPPRIMER
