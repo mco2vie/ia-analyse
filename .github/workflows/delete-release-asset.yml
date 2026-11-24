@@ -1,16 +1,16 @@
 name: Supprimer une pièce jointe de Release
 
 on:
-  # Une demande déposée dans ce dossier depuis ChatGPT déclenche la suppression.
   push:
     branches: [main]
     paths:
       - ".github/delete-requests/*.txt"
-  # Conservation du mode manuel en secours.
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Tag de la Release (ex. analyse-data)"
+        description: "Tag de la Release"
         required: true
         type: string
         default: "analyse-data"
@@ -20,7 +20,7 @@ on:
         type: string
         default: "orbitals.log"
       confirmation:
-        description: 'Pour autoriser la suppression, saisir exactement SUPPRIMER'
+        description: "Saisir exactement SUPPRIMER"
         required: true
         type: string
 
@@ -31,8 +31,8 @@ jobs:
   delete-release-asset:
     runs-on: ubuntu-latest
     steps:
-      - name: Récupérer le dépôt pour une demande automatique
-        if: github.event_name == 'push'
+      - name: Récupérer le dépôt pour les demandes automatiques
+        if: github.event_name == 'push' || github.event_name == 'schedule'
         uses: actions/checkout@v4
 
       - name: Lire et valider la demande
@@ -46,12 +46,15 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-
-          if [[ "$EVENT_NAME" == "push" ]]; then
-            mapfile -t REQUEST_FILES < <(git diff-tree --no-commit-id --name-only -r "$COMMIT_SHA" | grep -E '^\.github/delete-requests/[^/]+\.txt$' || true)
+          if [[ "$EVENT_NAME" == "push" || "$EVENT_NAME" == "schedule" ]]; then
+            if [[ "$EVENT_NAME" == "push" ]]; then
+              mapfile -t REQUEST_FILES < <(git diff-tree --no-commit-id --name-only -r "$COMMIT_SHA" | grep -E '^\.github/delete-requests/[^/]+\.txt$' || true)
+            else
+              mapfile -t REQUEST_FILES < <(find .github/delete-requests -maxdepth 1 -type f -name '*.txt' 2>/dev/null | sort | head -n 1)
+            fi
             if [[ "${#REQUEST_FILES[@]}" -ne 1 ]]; then
-              echo "::error::Une seule demande de suppression est autorisée par commit."
-              exit 1
+              echo "Aucune demande unique à traiter."
+              exit 0
             fi
             REQUEST_FILE="${REQUEST_FILES[0]}"
             TAG_NAME="$(sed -n 's/^tag=//p' "$REQUEST_FILE")"
@@ -68,11 +71,11 @@ jobs:
           [[ "$CONFIRMATION" == "SUPPRIMER" ]] || { echo "::error::Confirmation invalide."; exit 1; }
           [[ -n "$TAG_NAME" && -n "$ASSET_NAME" ]] || { echo "::error::Tag ou nom de fichier manquant."; exit 1; }
           [[ "$ASSET_NAME" != */* ]] || { echo "::error::Nom de fichier invalide."; exit 1; }
-
           echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "asset=$ASSET_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Vérifier la présence exacte du fichier
+        if: steps.request.outputs.asset != ''
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.request.outputs.tag }}
@@ -87,6 +90,7 @@ jobs:
           fi
 
       - name: Supprimer la pièce jointe confirmée
+        if: steps.request.outputs.asset != ''
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.request.outputs.tag }}
@@ -98,7 +102,7 @@ jobs:
           echo "Suppression terminée : '$ASSET_NAME' de la Release '$TAG_NAME'."
 
       - name: Consommer la demande automatique
-        if: github.event_name == 'push'
+        if: (github.event_name == 'push' || github.event_name == 'schedule') && steps.request.outputs.request_file != ''
         env:
           REQUEST_FILE: ${{ steps.request.outputs.request_file }}
         shell: bash
