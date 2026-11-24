@@ -1,5 +1,0 @@
-tag=analyse-data
-asset=orbitals.4.log
-confirmation=SUPPRIMER
-# relance automatique
-# relance apres correction shallow-checkout
