@@ -1,3 +1,0 @@
-tag=analyse-data
-asset=orbital1s.7z
-confirmation=SUPPRIMER
