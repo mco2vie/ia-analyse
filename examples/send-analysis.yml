@@ -1,0 +1,16 @@
+# À copier dans le dépôt source sous .github/workflows/send-analysis.yml
+name: Envoyer les données à IA ANALYSE
+
+on:
+  workflow_dispatch:
+
+jobs:
+  collect:
+    uses: mco2vie/ia-analyse/.github/workflows/collect.yml@main
+    with:
+      file_paths: |
+        logs/**
+        dumps/**
+        reports/**
+    secrets:
+      IA_ANALYSE_TOKEN: ${{ secrets.IA_ANALYSE_TOKEN }}
